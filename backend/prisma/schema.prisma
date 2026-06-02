@@ -1,0 +1,580 @@
+// RA Management System — Prisma schema (SPEC_MASTER.md compliant)
+// PostgreSQL with native enums. All IDs are String cuid() for consistency.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ----------------------------- Enums -----------------------------
+
+enum Role {
+  LEGAL_HEAD
+  RA_STAFF
+  VIEWER
+}
+
+enum EntityStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum RiskClass {
+  A
+  B
+  C
+  D
+  NA
+  PENDING
+}
+
+enum OwnershipType {
+  VMED_OWNED
+  MONITORED
+}
+
+enum CommercialStatus {
+  ACTIVE
+  INACTIVE_LICENSE_PENDING
+  INACTIVE_LICENSE_REVOKED
+}
+
+enum WorkflowStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  REGISTERED
+  EXPIRED
+}
+
+enum TaskType {
+  NEW_REGISTRATION
+  RENEWAL
+  CHANGE_NOTIFICATION
+  REVOCATION
+}
+
+enum TaskStatus {
+  NEW
+  DOC_COLLECTION
+  DOSSIER_PREP
+  SUBMITTED
+  REWORK_REQUIRED
+  RESUBMITTED
+  COMPLETED
+  CANCELLED
+}
+
+enum Priority {
+  HIGH
+  NORMAL
+  LOW
+}
+
+enum CaseStatus {
+  OPEN
+  CLOSED
+}
+
+enum DocumentType {
+  APPLICATION_LETTER
+  LETTER_OF_AUTHORIZATION
+  WARRANTY_CONFIRMATION
+  CERTIFICATE_OF_FREE_SALE
+  ISO_13485
+  VIETNAMESE_TECHNICAL_DOCUMENT
+  CATALOGUE
+  PRODUCT_STANDARD_DOC
+  IFU_ENGLISH
+  IFU_VIETNAMESE
+  VIETNAMESE_LABEL
+  CSDT_DOSSIER
+  CE_MDR_FDA
+  OTHER_DOCUMENTS
+}
+
+enum DocumentAppliesTo {
+  ENTIRE_CASE
+  SPECIFIC_PRODUCTS
+}
+
+enum DocumentStatus {
+  MISSING
+  COLLECTED
+  ACCEPTED
+  NEED_UPDATE
+  EXPIRED
+}
+
+enum ImportType {
+  NEW_PRODUCTS
+  LEGACY_PRODUCTS
+}
+
+enum ProductType {
+  MEDICAL_DEVICE
+  BIOCIDE
+  COSMETIC
+  SPARE_PARTS_ACCESSORIES
+  GENERAL_GOODS
+}
+
+// ----------------------------- Models -----------------------------
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  fullName     String    @map("full_name")
+  role         Role
+  isActive     Boolean   @default(true) @map("is_active")
+  lastLoginAt  DateTime? @map("last_login_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  responsibleTasks             RegistrationTask[]               @relation("ResponsibleUser")
+  supervisorTasks              RegistrationTask[]               @relation("SupervisorUser")
+  observerOf                   TaskObserver[]
+  statusChanges                TaskStatusHistory[]
+  comments                     TaskComment[]
+  uploadedDocs                 RegistrationDocument[]
+  uploadedCertificates         RegistrationCertificateHistory[]
+  uploadedClassifications      ClassificationResultHistory[]
+  viewerPerms                  ViewerManufacturerPermission[]
+  viewerDocTypePerms           ViewerDocumentTypePermission[]
+  importBatches                ImportBatch[]
+  notifications                Notification[]
+
+  @@map("users")
+}
+
+model Manufacturer {
+  id                   String       @id @default(cuid())
+  name                 String
+  shortName            String?      @map("short_name")
+  country              String?
+  address              String?
+  status               EntityStatus @default(ACTIVE)
+  duplicateCheckStatus String?      @map("duplicate_check_status")
+  duplicateCheckNotes  String?      @map("duplicate_check_notes")
+  createdAt            DateTime     @default(now()) @map("created_at")
+  updatedAt            DateTime     @updatedAt @map("updated_at")
+
+  plants                        ManufacturingPlant[]
+  products                      Product[]                      @relation("ProductManufacturer")
+  registrations                 ProductRegistration[]          @relation("LicenseHolderRegistrations")
+  licenseHolderProducts         ProductLicenseHolder[]
+  viewerPerms                   ViewerManufacturerPermission[]
+  viewerDocTypePerms            ViewerDocumentTypePermission[]
+
+  @@index([name])
+  @@map("manufacturers")
+}
+
+model ManufacturingPlant {
+  id             String       @id @default(cuid())
+  manufacturerId String       @map("manufacturer_id")
+  plantName      String       @map("plant_name")
+  country        String?
+  address        String?
+  iso13485CertNo String?      @map("iso_13485_cert_no")
+  iso13485Expiry DateTime?    @map("iso_13485_expiry")
+  status         EntityStatus @default(ACTIVE)
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  manufacturer Manufacturer  @relation(fields: [manufacturerId], references: [id], onDelete: Cascade)
+  productLinks ProductPlant[]
+
+  @@index([manufacturerId])
+  @@map("manufacturing_plants")
+}
+
+model Product {
+  id                      String     @id @default(cuid())
+  manufacturerProductCode String     @unique @map("manufacturer_product_code")
+  productNameEn           String     @map("product_name_en")
+  productNameVn           String     @map("product_name_vn")
+  manufacturerId          String     @map("manufacturer_id")
+  riskClass               RiskClass  @default(PENDING) @map("risk_class")
+  erpProductCode          String?    @map("erp_product_code")
+  sourceSheet             String?    @map("source_sheet")
+  importBatchId           String?    @map("import_batch_id")
+  createdAt               DateTime   @default(now()) @map("created_at")
+  updatedAt               DateTime   @updatedAt @map("updated_at")
+
+  productType             ProductType?               @map("product_type")
+  commercialStatus        CommercialStatus?          @map("commercial_status")
+
+  manufacturer            Manufacturer               @relation("ProductManufacturer", fields: [manufacturerId], references: [id])
+  plants                  ProductPlant[]
+  countries               ProductCountryOfOrigin[]
+  registrations           ProductRegistration[]
+  classificationHistory   ClassificationResultHistory[]
+  documentLinks           DocumentProductLink[]
+  licenseHolders          ProductLicenseHolder[]
+  taskLinks               TaskProduct[]
+  importBatch             ImportBatch?               @relation(fields: [importBatchId], references: [id])
+
+  @@index([manufacturerId])
+  @@index([riskClass])
+  @@map("products")
+}
+
+model ProductPlant {
+  id        String             @id @default(cuid())
+  productId String             @map("product_id")
+  plantId   String             @map("plant_id")
+
+  product Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
+  plant   ManufacturingPlant @relation(fields: [plantId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, plantId])
+  @@map("product_plants")
+}
+
+model ProductCountryOfOrigin {
+  id        String  @id @default(cuid())
+  productId String  @map("product_id")
+  country   String  // ISO 3166-1 alpha-2, e.g. "JP", "DE"
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, country])
+  @@map("product_countries_of_origin")
+}
+
+model ProductRegistration {
+  id                   String           @id @default(cuid())
+  productId            String           @map("product_id")
+  licenseHolderId      String           @map("license_holder_id")
+  ownershipType        OwnershipType    @map("ownership_type")
+  registrationNo       String?          @map("registration_no")
+  registrationExpiry   DateTime?        @map("registration_expiry")
+  approvalDate         DateTime?        @map("approval_date")
+  applicationNo        String?          @map("application_no")
+  classificationNumber String?          @map("classification_number")
+  commercialStatus     CommercialStatus @default(INACTIVE_LICENSE_PENDING) @map("commercial_status")
+  workflowStatus       WorkflowStatus   @default(NOT_STARTED) @map("workflow_status")
+  isActive             Boolean          @default(true) @map("is_active")
+  notes                String?
+  createdAt            DateTime         @default(now()) @map("created_at")
+  updatedAt            DateTime         @updatedAt @map("updated_at")
+
+  product             Product                          @relation(fields: [productId], references: [id], onDelete: Cascade)
+  licenseHolder       Manufacturer                     @relation("LicenseHolderRegistrations", fields: [licenseHolderId], references: [id])
+  tasks               RegistrationTask[]
+  cases               RegistrationCase[]
+  certificateHistory  RegistrationCertificateHistory[]
+
+  @@index([productId])
+  @@index([licenseHolderId])
+  @@index([ownershipType])
+  @@index([registrationExpiry])
+  @@map("product_registrations")
+}
+
+model RegistrationCertificateHistory {
+  id                    String         @id @default(cuid())
+  productRegistrationId String         @map("product_registration_id")
+  taskId                String?        @map("task_id")
+  uploadedById          String         @map("uploaded_by_id")
+
+  fileName              String         @map("file_name")
+  filePath              String         @map("file_path")
+  fileSize              Int            @map("file_size")
+
+  documentNumber        String?        @map("document_number")
+  issuedDate            DateTime?      @map("issued_date")
+  expiryDate            DateTime?      @map("expiry_date")
+
+  hasHardcopy           Boolean        @default(false) @map("has_hardcopy")
+  hasOriginal           Boolean        @default(false) @map("has_original")
+  hardcopyReceivedDate  DateTime?      @map("hardcopy_received_date")
+  originalReceivedDate  DateTime?      @map("original_received_date")
+  hardcopyNotes         String?        @map("hardcopy_notes")
+
+  status                DocumentStatus @default(COLLECTED) @map("status")
+  isCurrent             Boolean        @default(true) @map("is_current")
+  notes                 String?
+  createdAt             DateTime       @default(now()) @map("created_at")
+  updatedAt             DateTime       @updatedAt @map("updated_at")
+
+  productRegistration ProductRegistration @relation(fields: [productRegistrationId], references: [id], onDelete: Cascade)
+  task                RegistrationTask?   @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  uploadedBy          User                @relation(fields: [uploadedById], references: [id])
+
+  @@index([productRegistrationId])
+  @@index([isCurrent])
+  @@map("registration_certificate_history")
+}
+
+model ClassificationResultHistory {
+  id             String         @id @default(cuid())
+  productId      String         @map("product_id")
+  taskId         String?        @map("task_id")
+  uploadedById   String         @map("uploaded_by_id")
+
+  fileName       String         @map("file_name")
+  filePath       String         @map("file_path")
+  fileSize       Int            @map("file_size")
+
+  documentNumber        String?        @map("document_number")
+  classificationNumber  String?        @map("classification_number")
+  issuedDate            DateTime?      @map("issued_date")
+  expiryDate            DateTime?      @map("expiry_date")
+
+  hasHardcopy           Boolean        @default(false) @map("has_hardcopy")
+  hasOriginal           Boolean        @default(false) @map("has_original")
+  hardcopyReceivedDate  DateTime?      @map("hardcopy_received_date")
+  originalReceivedDate  DateTime?      @map("original_received_date")
+  hardcopyNotes         String?        @map("hardcopy_notes")
+
+  status         DocumentStatus @default(COLLECTED) @map("status")
+  isCurrent      Boolean        @default(true) @map("is_current")
+  notes          String?
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  product    Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  task       RegistrationTask? @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  uploadedBy User              @relation(fields: [uploadedById], references: [id])
+
+  @@index([productId])
+  @@index([isCurrent])
+  @@map("classification_result_history")
+}
+
+model RegistrationTask {
+  id                    String     @id @default(cuid())
+  taskCode              String     @unique @map("task_code")
+  taskType              TaskType   @map("task_type")
+  title                 String
+  status                TaskStatus @default(NEW)
+  statusStepNo          Int        @default(0) @map("status_step_no")
+  priority              Priority   @default(NORMAL)
+  responsibleId         String?    @map("responsible_id")
+  supervisorId          String?    @map("supervisor_id")
+  productRegistrationId String?    @map("product_registration_id")
+  startDate             DateTime?  @map("start_date")
+  targetDeadline        DateTime?  @map("target_deadline")
+  completedDate         DateTime?  @map("completed_date")
+  reworkCount           Int        @default(0) @map("rework_count")
+  remarks               String?
+  createdAt             DateTime   @default(now()) @map("created_at")
+  updatedAt             DateTime   @updatedAt @map("updated_at")
+
+  responsible         User?                            @relation("ResponsibleUser", fields: [responsibleId], references: [id])
+  supervisor          User?                            @relation("SupervisorUser", fields: [supervisorId], references: [id])
+  productRegistration ProductRegistration?             @relation(fields: [productRegistrationId], references: [id])
+  observers           TaskObserver[]
+  statusHistory       TaskStatusHistory[]
+  comments            TaskComment[]
+  case                RegistrationCase?
+  documents           RegistrationDocument[]
+  certificateUploads  RegistrationCertificateHistory[]
+  classificationUploads ClassificationResultHistory[]
+  taskProducts        TaskProduct[]
+
+  @@index([status])
+  @@index([responsibleId])
+  @@index([productRegistrationId])
+  @@map("registration_tasks")
+}
+
+model TaskObserver {
+  id     String @id @default(cuid())
+  taskId String @map("task_id")
+  userId String @map("user_id")
+
+  task RegistrationTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, userId])
+  @@map("task_observers")
+}
+
+model TaskStatusHistory {
+  id          String     @id @default(cuid())
+  taskId      String     @map("task_id")
+  fromStatus  String?    @map("from_status")
+  toStatus    String     @map("to_status")
+  changedById String?    @map("changed_by_id")
+  changedAt   DateTime   @default(now()) @map("changed_at")
+  note        String?
+
+  task      RegistrationTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  changedBy User?            @relation(fields: [changedById], references: [id])
+
+  @@index([taskId])
+  @@map("task_status_history")
+}
+
+model TaskComment {
+  id        String   @id @default(cuid())
+  taskId    String   @map("task_id")
+  userId    String   @map("user_id")
+  content   String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  task RegistrationTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User             @relation(fields: [userId], references: [id])
+
+  @@index([taskId])
+  @@map("task_comments")
+}
+
+model RegistrationCase {
+  id                    String     @id @default(cuid())
+  taskId                String     @unique @map("task_id")
+  productRegistrationId String?    @map("product_registration_id")
+  caseStatus            CaseStatus @default(OPEN) @map("case_status")
+  submissionDate        DateTime?  @map("submission_date")
+  applicationNo         String?    @map("application_no")
+  registrationNo        String?    @map("registration_no")
+  registrationExpiry    DateTime?  @map("registration_expiry")
+  classificationNumber  String?    @map("classification_number")
+  approvalDate          DateTime?  @map("approval_date")
+  completionNotes       String?    @map("completion_notes")
+  caseNotes             String?    @map("case_notes")
+  createdAt             DateTime   @default(now()) @map("created_at")
+  updatedAt             DateTime   @updatedAt @map("updated_at")
+
+  task                RegistrationTask      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  productRegistration ProductRegistration?  @relation(fields: [productRegistrationId], references: [id])
+
+  @@map("registration_cases")
+}
+
+model RegistrationDocument {
+  id             String            @id @default(cuid())
+  taskId         String?           @map("task_id")
+  documentType   DocumentType      @map("document_type")
+  documentNumber String?           @map("document_number")
+  appliesTo      DocumentAppliesTo @default(ENTIRE_CASE) @map("applies_to")
+  fileName       String?           @map("file_name")
+  filePath       String?           @map("file_path")
+  fileSize       Int?              @map("file_size")
+  issuedDate     DateTime?         @map("issued_date")
+  expiryDate     DateTime?         @map("expiry_date")
+  status         DocumentStatus    @default(MISSING)
+  hasHardcopy    Boolean           @default(false) @map("has_hardcopy")
+  hasOriginal    Boolean           @default(false) @map("has_original")
+  hardcopyReceivedDate DateTime?   @map("hardcopy_received_date")
+  originalReceivedDate DateTime?   @map("original_received_date")
+  hardcopyNotes  String?           @map("hardcopy_notes")
+  notes          String?
+  uploadedById   String?           @map("uploaded_by_id")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  task         RegistrationTask?     @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  uploadedBy   User?                 @relation(fields: [uploadedById], references: [id])
+  productLinks DocumentProductLink[]
+
+  @@index([documentType])
+  @@index([status])
+  @@map("registration_documents")
+}
+
+model DocumentProductLink {
+  id         String @id @default(cuid())
+  documentId String @map("document_id")
+  productId  String @map("product_id")
+
+  document RegistrationDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  product  Product              @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, productId])
+  @@map("document_product_links")
+}
+
+model ProductLicenseHolder {
+  productId       String @map("product_id")
+  licenseHolderId String @map("license_holder_id")
+
+  product       Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  licenseHolder Manufacturer @relation(fields: [licenseHolderId], references: [id])
+
+  @@id([productId, licenseHolderId])
+  @@map("product_license_holders")
+}
+
+model TaskProduct {
+  id        String @id @default(cuid())
+  taskId    String @map("task_id")
+  productId String @map("product_id")
+
+  task    RegistrationTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  product Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, productId])
+  @@map("task_products")
+}
+
+model ViewerManufacturerPermission {
+  id                   String  @id @default(cuid())
+  userId               String  @map("user_id")
+  manufacturerId       String  @map("manufacturer_id")
+  canViewProducts      Boolean @default(false) @map("can_view_products")
+  canViewDocuments     Boolean @default(false) @map("can_view_documents")
+  canDownloadDocuments Boolean @default(false) @map("can_download_documents")
+  canViewKpi           Boolean @default(false) @map("can_view_kpi")
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  manufacturer Manufacturer @relation(fields: [manufacturerId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, manufacturerId])
+  @@map("viewer_manufacturer_permissions")
+}
+
+model ViewerDocumentTypePermission {
+  id             String       @id @default(cuid())
+  userId         String       @map("user_id")
+  manufacturerId String       @map("manufacturer_id")
+  documentType   DocumentType @map("document_type")
+  canView        Boolean      @default(false) @map("can_view")
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  manufacturer Manufacturer @relation(fields: [manufacturerId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, manufacturerId, documentType])
+  @@map("viewer_document_type_permissions")
+}
+
+model ImportBatch {
+  id           String     @id @default(cuid())
+  importType   ImportType @map("import_type")
+  importedById String?    @map("imported_by_id")
+  totalRows    Int        @default(0) @map("total_rows")
+  successCount Int        @default(0) @map("success_count")
+  warningCount Int        @default(0) @map("warning_count")
+  errorCount   Int        @default(0) @map("error_count")
+  fileName     String?    @map("file_name")
+  createdAt    DateTime   @default(now()) @map("created_at")
+
+  importedBy User?     @relation(fields: [importedById], references: [id])
+  products   Product[]
+
+  @@map("import_batches")
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  type      String
+  title     String
+  message   String
+  link      String?
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
